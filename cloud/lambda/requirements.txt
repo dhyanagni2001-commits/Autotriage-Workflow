@@ -1,0 +1,4 @@
+# Kept minimal deliberately — Lambda has a 250MB unzipped package limit.
+# No torch/transformers here; model inference should hit a SageMaker
+# endpoint (see cloud/README.md "Open design question").
+boto3>=1.34

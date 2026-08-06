@@ -1,0 +1,29 @@
+# Core
+torch>=2.2
+transformers>=4.40
+sentence-transformers>=3.0
+datasets>=2.19
+accelerate>=0.30
+
+# Retrieval
+faiss-cpu>=1.8      # swap for faiss-gpu on CARC
+numpy>=1.26
+scikit-learn>=1.4
+
+# Agent / orchestration
+langgraph>=0.1
+langchain-core>=0.2
+langchain-openai>=0.1   # or swap for your preferred LLM provider
+
+# Eval / utils
+pandas>=2.2
+tqdm>=4.66
+pyyaml>=6.0
+matplotlib>=3.8
+
+# Cloud (local testing of Lambda handlers)
+boto3>=1.34
+
+# Dev
+pytest>=8.0
+black>=24.0

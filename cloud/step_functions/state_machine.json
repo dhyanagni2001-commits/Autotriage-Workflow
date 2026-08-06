@@ -1,0 +1,89 @@
+{
+  "Comment": "AutoTriage pipeline: retrieve -> classify -> decide -> act, with retries and an escalation fallback on failure.",
+  "StartAt": "Retrieve",
+  "States": {
+    "Retrieve": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-retrieve",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "EscalateOnFailure"
+        }
+      ],
+      "Next": "Classify"
+    },
+    "Classify": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-classify",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "EscalateOnFailure"
+        }
+      ],
+      "Next": "Decide"
+    },
+    "Decide": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-decide",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "EscalateOnFailure"
+        }
+      ],
+      "Next": "Act"
+    },
+    "Act": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-act",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "EscalateOnFailure"
+        }
+      ],
+      "Next": "WriteAuditLog"
+    },
+    "EscalateOnFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-escalate",
+      "Comment": "Any unrecoverable pipeline failure routes here instead of dropping the ticket silently.",
+      "Next": "WriteAuditLog"
+    },
+    "WriteAuditLog": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-audit-log",
+      "End": true
+    }
+  }
+}

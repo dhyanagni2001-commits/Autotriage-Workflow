@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Data & artifacts (too large / private for git)
+data/raw/
+data/processed/
+retriever/checkpoints/
+retriever/faiss_index/
+classifier/checkpoints/
+*.faiss
+*.bin
+*.pt
+*.safetensors
+
+# Env / secrets
+.env
+*.pem
+
+# Notebooks scratch
+notebooks/*
+!notebooks/.gitkeep
+
+# OS
+.DS_Store
+
+# CARC job logs
+*.out
+*.err
+slurm-*.out

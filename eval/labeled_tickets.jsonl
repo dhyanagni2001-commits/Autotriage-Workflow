@@ -1,0 +1,5 @@
+{"ticket_text": "Hi, I was charged twice for my subscription this month, can you refund one of the charges? Order #48213.", "amount_usd": 12.99, "expected_action": "auto_resolve"}
+{"ticket_text": "I need a refund for my order, it was $340 and never arrived.", "amount_usd": 340.00, "expected_action": "escalate"}
+{"ticket_text": "This is the third time I've been overcharged, I am absolutely furious and want to cancel my account immediately.", "amount_usd": 45.00, "expected_action": "escalate"}
+{"ticket_text": "How do I change the email on my account?", "amount_usd": null, "expected_action": "draft_hold"}
+{"ticket_text": "My package says delivered but I never got it, order #91022.", "amount_usd": null, "expected_action": "draft_hold"}
