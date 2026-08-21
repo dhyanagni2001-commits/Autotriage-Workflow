@@ -1,0 +1,193 @@
+# AWS SAM template for the AutoTriage pipeline.
+#
+# This is the Infrastructure-as-Code definition for the architecture in
+# the top-level README (API Gateway -> Lambda -> Step Functions ->
+# Lambda x N -> DynamoDB). It is NOT deployed as part of this project —
+# see cloud/README.md for why (cost). Treat it as the artifact that
+# `sam deploy` would need, written and reviewable, but never run.
+#
+# Validate without deploying:
+#   sam validate --template cloud/template.yaml
+# Would-be deploy (do not run without reading cloud/README.md first):
+#   sam build --template cloud/template.yaml
+#   sam deploy --guided
+
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AutoTriage — agentic support-ticket triage pipeline
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        DYNAMODB_TABLE: !Ref TicketsTable
+        POWERTOOLS_SERVICE_NAME: autotriage
+
+Parameters:
+  RetrieverEndpointName:
+    Type: String
+    Default: ""
+    Description: SageMaker endpoint name for the fine-tuned retriever. Leave blank to use the in-process fallback (local testing only).
+  ClassifierEndpointName:
+    Type: String
+    Default: ""
+    Description: SageMaker endpoint name for the fine-tuned classifier. Leave blank to use the in-process fallback (local testing only).
+  OpenAIApiKeySecretArn:
+    Type: String
+    Description: ARN of a Secrets Manager secret holding OPENAI_API_KEY, injected into the Decide function.
+
+Resources:
+
+  TicketsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: autotriage-tickets
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: ticket_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ticket_id
+          KeyType: HASH
+
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: ingest_handler.handler
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref AutoTriageStateMachine
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TicketsTable
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt AutoTriageStateMachine.Name
+      Events:
+        IngestApi:
+          Type: Api
+          Properties:
+            Path: /tickets
+            Method: post
+
+  RetrieveFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: retrieve_handler.handler
+      Timeout: 15
+      Environment:
+        Variables:
+          RETRIEVER_ENDPOINT: !Ref RetrieverEndpointName
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sagemaker:InvokeEndpoint
+              Resource: "*"
+
+  ClassifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: classify_handler.handler
+      Timeout: 15
+      Environment:
+        Variables:
+          CLASSIFIER_ENDPOINT: !Ref ClassifierEndpointName
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sagemaker:InvokeEndpoint
+              Resource: "*"
+
+  DecideFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: decide_handler.handler
+      Timeout: 20
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Ref OpenAIApiKeySecretArn
+
+  ActFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: act_handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TicketsTable
+
+  EscalateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: escalate_handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TicketsTable
+
+  AuditLogFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: audit_log_handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TicketsTable
+
+  StateMachineExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeStageLambdas
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt RetrieveFunction.Arn
+                  - !GetAtt ClassifyFunction.Arn
+                  - !GetAtt DecideFunction.Arn
+                  - !GetAtt ActFunction.Arn
+                  - !GetAtt EscalateFunction.Arn
+                  - !GetAtt AuditLogFunction.Arn
+
+  # step_functions/state_machine.json is the source of truth for the
+  # pipeline shape (retries + Catch->EscalateOnFailure branches); the
+  # DefinitionSubstitutions below swap its REGION/ACCOUNT_ID/function-name
+  # placeholders for the real ARNs SAM generates for the functions above.
+  AutoTriageStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: autotriage-pipeline
+      DefinitionUri: step_functions/state_machine.json
+      Role: !GetAtt StateMachineExecutionRole.Arn
+      DefinitionSubstitutions:
+        RetrieveFunctionArn: !GetAtt RetrieveFunction.Arn
+        ClassifyFunctionArn: !GetAtt ClassifyFunction.Arn
+        DecideFunctionArn: !GetAtt DecideFunction.Arn
+        ActFunctionArn: !GetAtt ActFunction.Arn
+        EscalateFunctionArn: !GetAtt EscalateFunction.Arn
+        AuditLogFunctionArn: !GetAtt AuditLogFunction.Arn
+
+Outputs:
+  ApiEndpoint:
+    Description: POST here to ingest a ticket
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/tickets"
+  StateMachineArn:
+    Value: !Ref AutoTriageStateMachine
+  TicketsTableName:
+    Value: !Ref TicketsTable

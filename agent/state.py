@@ -3,8 +3,11 @@ from typing import Optional, TypedDict
 
 
 class TicketState(TypedDict, total=False):
+    ticket_id: Optional[str]
     ticket_text: str
     amount_usd: Optional[float]
+    order_id: Optional[str]
+    customer_id: Optional[str]
 
     # Populated by retrieve node
     retrieved_articles: list  # list of {"id": str, "text": str, "score": float}

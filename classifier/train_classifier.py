@@ -1,6 +1,13 @@
 """
 Fine-tune distilbert-base-uncased for ticket category classification.
 
+Saves a HuggingFace `Trainer` checkpoint every epoch under `output_dir`
+(checkpoint-<step>/) and a `TRAINING_COMPLETE` marker once the final
+model has been saved. Re-running the script resumes from the latest
+checkpoint instead of starting over, and does nothing if training
+already finished — this matters on Kaggle, where a session can time out
+or disconnect mid-run and you don't want to lose GPU hours.
+
 Usage:
     python classifier/train_classifier.py --config config.yaml
 """
@@ -18,6 +25,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.trainer_utils import get_last_checkpoint
 
 
 def load_split(path, label2id):
@@ -50,6 +58,15 @@ def main():
     label2id = {l: i for i, l in enumerate(labels)}
     id2label = {i: l for l, i in label2id.items()}
 
+    output_dir = Path(c_cfg["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    complete_marker = output_dir / "TRAINING_COMPLETE"
+
+    if complete_marker.exists():
+        print(f"{complete_marker} already exists — training already finished. "
+              f"Delete it to force retraining from scratch.")
+        return
+
     tokenizer = AutoTokenizer.from_pretrained(c_cfg["base_model"])
 
     def tokenize(batch):
@@ -58,14 +75,18 @@ def main():
     train_ds = load_split(processed_dir / "classifier_train.jsonl", label2id).map(tokenize, batched=True)
     val_ds = load_split(processed_dir / "classifier_val.jsonl", label2id).map(tokenize, batched=True)
 
-    model = AutoModelForSequenceClassification.from_pretrained(
-        c_cfg["base_model"],
-        num_labels=len(labels),
-        id2label=id2label,
-        label2id=label2id,
-    )
+    resume_checkpoint = get_last_checkpoint(str(output_dir))
+    if resume_checkpoint:
+        print(f"Resuming from checkpoint: {resume_checkpoint}")
+        model = AutoModelForSequenceClassification.from_pretrained(
+            resume_checkpoint, num_labels=len(labels), id2label=id2label, label2id=label2id,
+        )
+    else:
+        print(f"Starting fresh from base model {c_cfg['base_model']}")
+        model = AutoModelForSequenceClassification.from_pretrained(
+            c_cfg["base_model"], num_labels=len(labels), id2label=id2label, label2id=label2id,
+        )
 
-    output_dir = Path(c_cfg["output_dir"])
     training_args = TrainingArguments(
         output_dir=str(output_dir),
         per_device_train_batch_size=c_cfg["batch_size"],
@@ -74,6 +95,7 @@ def main():
         learning_rate=c_cfg["lr"],
         eval_strategy="epoch",
         save_strategy="epoch",
+        save_total_limit=c_cfg.get("save_total_limit", 3),
         load_best_model_at_end=True,
         metric_for_best_model="macro_f1",
         logging_steps=50,
@@ -88,9 +110,10 @@ def main():
         compute_metrics=compute_metrics,
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_checkpoint)
     trainer.save_model(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
+    complete_marker.write_text("ok")
     print(f"Saved fine-tuned classifier -> {output_dir}")
 
 

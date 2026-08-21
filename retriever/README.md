@@ -8,7 +8,12 @@ KB/policy article.
 
 - `train_biencoder.py` — fine-tunes a `sentence-transformers` bi-encoder
   with `MultipleNegativesRankingLoss` using the hard negatives generated
-  in `data/prepare_bitext.py`.
+  in `data/prepare_bitext.py`. Saves a full checkpoint after every epoch
+  under `<output_dir>/checkpoints/epoch_N/` plus a `training_state.json`
+  tracking completed epochs — re-running the script resumes from the
+  last completed epoch instead of restarting from the base model. If
+  `training_state.json` already shows all epochs done, it's a no-op
+  (delete the file to force retraining from scratch).
 - `build_index.py` — embeds all KB articles with the fine-tuned model and
   builds a FAISS index for retrieval at inference time.
 - `eval_retrieval.py` — computes P@k and MRR on the held-out retrieval
@@ -28,12 +33,16 @@ python retriever/build_index.py --config config.yaml
 python retriever/eval_retrieval.py --config config.yaml
 ```
 
-## Running on USC CARC
+## Running on Kaggle
 
-```bash
-conda activate querylens   # or a new autotriage env, same Python 3.11 base
-sbatch retriever/carc_train.sbatch     # TODO: add sbatch script, copy from QueryLens
-```
+Training runs on Kaggle (GPU notebook), not locally or on CARC — see
+[`notebooks/kaggle_train_autotriage.ipynb`](../notebooks/kaggle_train_autotriage.ipynb)
+for the full pipeline (data prep -> retriever -> classifier -> both
+evals) with epoch-level resume across session timeouts. Copy the
+resulting `retriever/checkpoints/biencoder-v1/` and
+`retriever/faiss_index/` back into this repo locally to wire real
+retrieval into the agent (`agent/nodes.py` picks them up automatically
+if present).
 
 ## Expected output of eval_retrieval.py
 
@@ -49,6 +58,6 @@ the approach used in QueryLens."
 
 ## TODO
 
-- [ ] Copy/adapt CARC sbatch script from QueryLens repo
+- [x] Kaggle training notebook with epoch-level resume (see above)
 - [ ] Run training, fill in real eval numbers above
 - [ ] Decide on final `hard_negatives_per_pos` after checking train loss curve

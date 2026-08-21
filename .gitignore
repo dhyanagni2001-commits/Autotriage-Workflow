@@ -22,6 +22,7 @@ classifier/checkpoints/
 # Notebooks scratch
 notebooks/*
 !notebooks/.gitkeep
+!notebooks/kaggle_train_autotriage.ipynb
 
 # OS
 .DS_Store

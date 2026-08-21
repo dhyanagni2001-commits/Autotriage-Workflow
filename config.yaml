@@ -18,6 +18,10 @@ retriever:
   lr: 2.0e-5
   hard_negatives_per_pos: 4
   eval_k: [1, 5, 10]
+  # Epoch-level checkpoints written under output_dir/checkpoints/epoch_N so
+  # training can resume after a Kaggle session timeout/crash instead of
+  # restarting from the base model. See train_biencoder.py::resume logic.
+  checkpoint_save_total_limit: 3
 
 classifier:
   base_model: distilbert-base-uncased
@@ -26,6 +30,7 @@ classifier:
   batch_size: 32
   epochs: 4
   lr: 3.0e-5
+  save_total_limit: 3
   labels:
     - billing
     - refund
@@ -37,8 +42,12 @@ classifier:
 agent:
   llm_provider: openai
   llm_model: gpt-4o-mini
+  llm_temperature: 0.3
+  llm_max_tokens: 300
+  llm_timeout_s: 15
   auto_approve_refund_threshold_usd: 50
   confidence_threshold: 0.75
+  retrieval_top_k: 3
 
 aws:
   region: us-west-2

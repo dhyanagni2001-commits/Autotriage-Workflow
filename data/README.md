@@ -28,6 +28,12 @@ ticket→KB-article pairs for retrieval training.
 python data/prepare_bitext.py --config config.yaml
 ```
 
+This also runs as the first step of
+[`notebooks/kaggle_train_autotriage.ipynb`](../notebooks/kaggle_train_autotriage.ipynb),
+which skips it automatically if `data/processed/classifier_train.jsonl`
+already exists (data prep is deterministic given the same seed, so
+there's nothing to gain from re-running it on every training resume).
+
 Outputs:
 
 ```

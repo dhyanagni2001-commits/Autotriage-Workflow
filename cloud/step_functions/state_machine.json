@@ -4,7 +4,7 @@
   "States": {
     "Retrieve": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-retrieve",
+      "Resource": "${RetrieveFunctionArn}",
       "Retry": [
         {
           "ErrorEquals": ["States.TaskFailed"],
@@ -24,7 +24,7 @@
     },
     "Classify": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-classify",
+      "Resource": "${ClassifyFunctionArn}",
       "Retry": [
         {
           "ErrorEquals": ["States.TaskFailed"],
@@ -44,7 +44,7 @@
     },
     "Decide": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-decide",
+      "Resource": "${DecideFunctionArn}",
       "Retry": [
         {
           "ErrorEquals": ["States.TaskFailed"],
@@ -64,7 +64,7 @@
     },
     "Act": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-act",
+      "Resource": "${ActFunctionArn}",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -76,13 +76,13 @@
     },
     "EscalateOnFailure": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-escalate",
+      "Resource": "${EscalateFunctionArn}",
       "Comment": "Any unrecoverable pipeline failure routes here instead of dropping the ticket silently.",
       "Next": "WriteAuditLog"
     },
     "WriteAuditLog": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:autotriage-audit-log",
+      "Resource": "${AuditLogFunctionArn}",
       "End": true
     }
   }

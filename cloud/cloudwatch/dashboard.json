@@ -1,0 +1,76 @@
+{
+  "_comment": "CloudWatch dashboard for the AutoTriage pipeline. Not deployed as part of this project (see cloud/README.md re: cost) — create with `aws cloudwatch put-dashboard --dashboard-name autotriage --dashboard-body file://cloud/cloudwatch/dashboard.json` once the Lambdas/state machine exist. Ticket-outcome metrics (auto-resolve %, escalation rate) are EMF custom metrics that act_handler.py / escalate_handler.py would need to emit under the AutoTriage namespace; the Lambda/Step-Functions widgets below use metrics AWS publishes automatically and work with no extra code.",
+  "widgets": [
+    {
+      "type": "metric",
+      "x": 0, "y": 0, "width": 12, "height": 6,
+      "properties": {
+        "title": "Step Functions executions",
+        "view": "timeSeries",
+        "stacked": false,
+        "metrics": [
+          ["AWS/States", "ExecutionsStarted", "StateMachineArn", "autotriage-pipeline"],
+          ["AWS/States", "ExecutionsSucceeded", "StateMachineArn", "autotriage-pipeline"],
+          ["AWS/States", "ExecutionsFailed", "StateMachineArn", "autotriage-pipeline"]
+        ],
+        "period": 300,
+        "stat": "Sum",
+        "region": "us-west-2"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12, "y": 0, "width": 12, "height": 6,
+      "properties": {
+        "title": "Per-stage Lambda duration (p50/p99)",
+        "view": "timeSeries",
+        "metrics": [
+          ["AWS/Lambda", "Duration", "FunctionName", "autotriage-retrieve", { "stat": "p50" }],
+          ["...", { "stat": "p99" }],
+          ["AWS/Lambda", "Duration", "FunctionName", "autotriage-classify", { "stat": "p50" }],
+          ["...", { "stat": "p99" }],
+          ["AWS/Lambda", "Duration", "FunctionName", "autotriage-decide", { "stat": "p50" }],
+          ["...", { "stat": "p99" }],
+          ["AWS/Lambda", "Duration", "FunctionName", "autotriage-act", { "stat": "p50" }],
+          ["...", { "stat": "p99" }]
+        ],
+        "period": 300,
+        "region": "us-west-2"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 6, "width": 12, "height": 6,
+      "properties": {
+        "title": "Per-stage Lambda errors",
+        "view": "timeSeries",
+        "metrics": [
+          ["AWS/Lambda", "Errors", "FunctionName", "autotriage-retrieve"],
+          ["AWS/Lambda", "Errors", "FunctionName", "autotriage-classify"],
+          ["AWS/Lambda", "Errors", "FunctionName", "autotriage-decide"],
+          ["AWS/Lambda", "Errors", "FunctionName", "autotriage-act"],
+          ["AWS/Lambda", "Errors", "FunctionName", "autotriage-escalate"]
+        ],
+        "period": 300,
+        "stat": "Sum",
+        "region": "us-west-2"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12, "y": 6, "width": 12, "height": 6,
+      "properties": {
+        "title": "Auto-resolve vs. escalation rate (custom metric, namespace: AutoTriage)",
+        "view": "pie",
+        "metrics": [
+          ["AutoTriage", "TicketsAutoResolved"],
+          ["AutoTriage", "TicketsDraftHeld"],
+          ["AutoTriage", "TicketsEscalated"]
+        ],
+        "period": 3600,
+        "stat": "Sum",
+        "region": "us-west-2"
+      }
+    }
+  ]
+}
