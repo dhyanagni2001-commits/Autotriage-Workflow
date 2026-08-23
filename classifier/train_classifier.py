@@ -24,6 +24,7 @@ from transformers import (
     AutoTokenizer,
     Trainer,
     TrainingArguments,
+    set_seed,
 )
 from transformers.trainer_utils import get_last_checkpoint
 
@@ -52,6 +53,7 @@ def main():
 
     cfg = yaml.safe_load(open(args.config))
     c_cfg = cfg["classifier"]
+    seed = cfg["data"]["seed"]
     processed_dir = Path(cfg["data"]["processed_dir"])
 
     labels = c_cfg["labels"]
@@ -66,6 +68,14 @@ def main():
         print(f"{complete_marker} already exists — training already finished. "
               f"Delete it to force retraining from scratch.")
         return
+
+    # Must run before from_pretrained() below — the classification head on
+    # top of distilbert is randomly initialized at that call, and
+    # TrainingArguments.seed (applied later, inside Trainer.__init__) is too
+    # late to control it. Without this, resuming vs. a fresh run — or two
+    # fresh runs — start from different head weights even with the same
+    # config.
+    set_seed(seed)
 
     tokenizer = AutoTokenizer.from_pretrained(c_cfg["base_model"])
 
@@ -99,6 +109,8 @@ def main():
         load_best_model_at_end=True,
         metric_for_best_model="macro_f1",
         logging_steps=50,
+        seed=seed,
+        data_seed=seed,
     )
 
     trainer = Trainer(

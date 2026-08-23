@@ -14,12 +14,29 @@ Usage:
 """
 import argparse
 import json
+import random
 import shutil
 from pathlib import Path
 
+import numpy as np
+import torch
 import yaml
 from sentence_transformers import SentenceTransformer, InputExample, losses
 from torch.utils.data import DataLoader
+
+
+def _set_seed(seed: int):
+    """Seed every RNG the training loop touches. Called once before model
+    creation and again with seed+epoch before each epoch's fit() call, so
+    a given epoch's shuffle order and dropout are identical whether it ran
+    as part of one continuous run or after a resume — i.e. weights only
+    depend on `seed`, not on how many times the job got interrupted."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def load_kb(path):
@@ -83,7 +100,10 @@ def main():
     cfg = yaml.safe_load(open(args.config))
     r_cfg = cfg["retriever"]
     data_cfg = cfg["data"]
+    seed = data_cfg["seed"]
     processed_dir = Path(data_cfg["processed_dir"])
+
+    _set_seed(seed)
 
     kb = load_kb(processed_dir / "kb_articles.jsonl")
     train_examples = load_training_examples(processed_dir / "retrieval_train.jsonl", kb)
@@ -126,6 +146,7 @@ def main():
 
     for epoch in range(completed_epochs, total_epochs):
         print(f"--- epoch {epoch + 1}/{total_epochs} ---")
+        _set_seed(seed + epoch)
         model.fit(
             train_objectives=[(train_dataloader, train_loss)],
             epochs=1,
