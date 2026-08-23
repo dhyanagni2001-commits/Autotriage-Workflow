@@ -7,6 +7,7 @@ Usage:
 """
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import torch
@@ -14,7 +15,13 @@ import yaml
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from classifier.baseline_tfidf import load_split, train_baseline
+# Run directly as `python classifier/eval_classifier.py`, this file's own
+# directory (not the repo root) ends up as sys.path[0], so a `classifier.`-
+# prefixed import only works when the repo is pip-installed (`pip install
+# -e .`). Kaggle never runs that install step, so resolve the sibling
+# module by path instead of relying on it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from baseline_tfidf import load_split, train_baseline
 
 
 def eval_distilbert(model_dir, test_texts, test_labels, labels):
