@@ -113,14 +113,19 @@ def main():
         data_seed=seed,
     )
 
-    trainer = Trainer(
+    trainer_kwargs = dict(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        tokenizer=tokenizer,
         compute_metrics=compute_metrics,
     )
+    try:
+        # transformers >= 4.49 renamed this kwarg; older pins still need
+        # `tokenizer=` since they don't accept `processing_class` at all.
+        trainer = Trainer(**trainer_kwargs, processing_class=tokenizer)
+    except TypeError:
+        trainer = Trainer(**trainer_kwargs, tokenizer=tokenizer)
 
     trainer.train(resume_from_checkpoint=resume_checkpoint)
     trainer.save_model(str(output_dir))
