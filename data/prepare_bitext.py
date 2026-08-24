@@ -81,11 +81,22 @@ def build_kb_articles(ds, labels):
 
 
 def build_examples(ds):
+    """One example per *distinct* instruction string. The raw dataset is
+    templated (many rows are exact-duplicate text, sometimes with unfilled
+    `{{...}}` placeholders) — without this dedup, identical strings land in
+    both train and test after the random split below, and the classifier/
+    retriever partly just memorize them instead of generalizing, inflating
+    eval numbers."""
+    seen = set()
     examples = []
     for row in ds:
+        text = row["instruction"]
+        if text in seen:
+            continue
+        seen.add(text)
         label = INTENT_MAP.get(row["intent"], DEFAULT_LABEL)
         examples.append({
-            "ticket_text": row["instruction"],
+            "ticket_text": text,
             "label": label,
             "intent_raw": row["intent"],
         })
