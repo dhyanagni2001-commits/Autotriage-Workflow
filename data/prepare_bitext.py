@@ -142,6 +142,27 @@ def build_retrieval_pairs(examples, articles, hard_negatives_per_pos, seed):
     return pairs
 
 
+def assert_no_split_leakage(splits: dict, key: str = "ticket_text"):
+    """Fail fast if the same text ends up in more than one split. This is
+    the exact bug that previously inflated eval numbers (classifier hit
+    99.9%, even the TF-IDF baseline hit 99.5%) — the raw dataset is
+    templated and contains exact-duplicate rows, and a naive random split
+    let identical text leak from train into val/test. build_examples()
+    dedups up front so this should never trigger again; this assertion
+    exists to catch a regression rather than to fix anything itself."""
+    seen_in = {}
+    for split_name, rows in splits.items():
+        for row in rows:
+            text = row[key]
+            prior = seen_in.get(text)
+            if prior is not None and prior != split_name:
+                raise AssertionError(
+                    f"data leakage: {text!r} appears in both {prior!r} and "
+                    f"{split_name!r} splits"
+                )
+            seen_in[text] = split_name
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.yaml")
@@ -168,14 +189,18 @@ def main():
     train, val, test = split(
         examples, data_cfg["train_split"], data_cfg["val_split"], data_cfg["seed"]
     )
+    assert_no_split_leakage({"train": train, "val": val, "test": test})
     write_jsonl(processed_dir / "classifier_train.jsonl", train)
     write_jsonl(processed_dir / "classifier_val.jsonl", val)
     write_jsonl(processed_dir / "classifier_test.jsonl", test)
 
     hard_neg_k = cfg["retriever"]["hard_negatives_per_pos"]
+    retrieval_splits = {}
     for name, split_examples in [("train", train), ("val", val), ("test", test)]:
         pairs = build_retrieval_pairs(split_examples, articles, hard_neg_k, data_cfg["seed"])
+        retrieval_splits[name] = pairs
         write_jsonl(processed_dir / f"retrieval_{name}.jsonl", pairs)
+    assert_no_split_leakage(retrieval_splits)
 
 
 if __name__ == "__main__":

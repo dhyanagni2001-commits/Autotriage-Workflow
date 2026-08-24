@@ -56,7 +56,7 @@ are trained models with real held-out metrics:
 | Retriever  | bi-encoder (contrastive + hard negatives) | `all-MiniLM-L6-v2` off-the-shelf | P@k, MRR |
 | Classifier | `distilbert-base-uncased` | TF-IDF + logistic regression      | accuracy, macro-F1 |
 
-*(numbers filled in under [Evaluation](#evaluation) once training on CARC is done)*
+See [Evaluation](#evaluation) for the actual numbers from training on Kaggle.
 
 The LangGraph agent deliberately does **not** do retrieval or
 classification itself — it only consumes structured outputs from the two
@@ -236,17 +236,44 @@ python classifier/eval_classifier.py --config config.yaml
 python -m eval.run_eval_suite --test-file eval/labeled_tickets.jsonl
 ```
 
-Results table (to fill in after training runs complete):
+Results (Kaggle T4 x2, Bitext dataset, deduplicated splits — see
+[Design notes](#design-notes) for why dedup mattered):
 
 ```
 retriever                 P@1    P@5    P@10   MRR
-baseline (off-the-shelf)  —      —      —      —
-fine-tuned                —      —      —      —
+baseline (off-the-shelf)  0.54   0.96   1.00   0.68
+fine-tuned                0.97   1.00   1.00   0.99
 
 classifier                 accuracy  macro-F1
-tfidf + logreg (baseline)  —         —
-distilbert (fine-tuned)    —         —
+tfidf + logreg (baseline)  0.992     0.992
+distilbert (fine-tuned)    0.997     0.997
 ```
+
+Both retrieval and classification score near-ceiling on both the
+fine-tuned model *and* the dumb baseline, which is a real result, not a
+bug — worth reading honestly rather than at face value:
+
+- **Retrieval** only has 6 possible targets (one canonical KB article per
+  label), so even the off-the-shelf baseline has a small candidate pool
+  to search over. The fine-tuned bi-encoder's real win is going from
+  P@1 0.54 → 0.97, i.e. actually learning to pick the *right* one of the
+  6 on the first try, not the ceiling values themselves.
+- **Classification** is easy because the 6 coarse categories
+  (`billing`/`refund`/`technical`/`account`/`shipping`/`urgent_escalate`)
+  are lexically well-separated — a linear TF-IDF model gets 99.2% on its
+  own. DistilBERT's real advantage here is a small, consistent margin
+  (0.997 vs. 0.992), not a dramatic one. A harder, more convincing
+  benchmark would classify against the dataset's original ~27 fine-grained
+  intents instead of the coarse 6-label mapping in `config.yaml`.
+- These numbers were confirmed *not* to be train/test leakage: an initial
+  run (before the dedup fix below) hit 99.9%/100% on the classifier
+  because the raw Bitext dataset contains exact-duplicate rows (it's
+  templated, e.g. unfilled `{{Order Number}}` placeholders repeat
+  verbatim) that a naive random split let leak across train/test.
+  `data/prepare_bitext.py::build_examples` now dedupes by exact ticket
+  text before splitting, `assert_no_split_leakage` fails the whole data
+  prep step if that ever regresses, and `tests/test_data_no_leakage.py`
+  re-verifies it against the real processed data.
 
 ## Cloud deployment
 
@@ -276,10 +303,20 @@ breakdown, the SageMaker-vs-Lambda-container design decision, and exact
       (written, not deployed — see [`cloud/README.md`](cloud/README.md))
 - [x] CloudWatch dashboard definition
 - [x] Unit tests for the agent's decision logic (`pytest tests/`)
-- [ ] Data prep run against real Bitext dataset, finalize intent → label mapping
-- [ ] Bi-encoder fine-tuning + retrieval eval (P@k vs. baseline) — run the notebook
-- [ ] DistilBERT classifier fine-tuning + eval (accuracy / F1 vs. baseline) — run the notebook
-- [ ] Final eval report with real numbers in this README
+- [x] Data prep run against real Bitext dataset, finalize intent → label mapping
+- [x] Bi-encoder fine-tuning + retrieval eval (P@k vs. baseline) — run on Kaggle
+- [x] DistilBERT classifier fine-tuning + eval (accuracy / F1 vs. baseline) — run on Kaggle
+- [x] Final eval report with real numbers in this README (see [Evaluation](#evaluation))
+- [x] Found and fixed train/test leakage from duplicate rows in the raw
+      dataset (`data/prepare_bitext.py::build_examples` dedup +
+      `assert_no_split_leakage` guard + `tests/test_data_no_leakage.py`)
+      and reproducibility gaps in both training scripts (unseeded shuffling
+      / classifier head init — see `_set_seed` in
+      [`retriever/train_biencoder.py`](retriever/train_biencoder.py) and
+      `set_seed` in [`classifier/train_classifier.py`](classifier/train_classifier.py))
+- [ ] Download `autotriage_artifacts.zip` from the Kaggle run into this
+      repo's local paths and confirm `python -m agent.graph` picks up the
+      real trained models instead of the mock fallback
 
 ## Design notes
 
