@@ -10,16 +10,20 @@ ticket→KB-article pairs for retrieval training.
 ## What `prepare_bitext.py` does
 
 1. Downloads the dataset via `datasets.load_dataset`.
-2. Maps the raw `intent` values down to the 6 labels in `config.yaml`
-   (`billing`, `refund`, `technical`, `account`, `shipping`,
-   `urgent_escalate`) — see `INTENT_MAP` in the script, edit as needed
-   once you've looked at the real label distribution.
-3. Builds a small synthetic "knowledge base": one canonical policy/help
-   article per intent, generated from the dataset's `response` field
-   (deduplicated + cleaned). This is what the retriever learns to fetch.
-4. Builds retrieval training pairs: `(ticket_text, correct_kb_article_id,
-   hard_negative_kb_article_ids)`.
-5. Splits into train/val/test per `config.yaml` and writes JSONL to
+2. Deduplicates on a *normalized* form of the ticket (lowercased,
+   punctuation stripped, `{{placeholders}}` collapsed): 26,872 raw rows ->
+   23,826 unique tickets.
+3. Keeps the 27 fine-grained `intent` values as classifier labels
+   (written to `data/processed/labels.json`). Each intent maps to one of
+   6 routing categories (`billing`, `refund`, `technical`, `account`,
+   `shipping`, `urgent_escalate`) via `INTENT_MAP` in `data/labels.py`.
+4. Builds a 27-article knowledge base: one canonical article per intent,
+   taken from the dataset's `response` field. This is what the retriever
+   learns to fetch.
+5. Builds retrieval triplets: `(ticket_text, correct_kb_article_id,
+   hard_negative_kb_article_ids)`, with hard negatives drawn first from
+   the same routing category (e.g. `track_refund` vs. `get_refund`).
+6. Splits into train/val/test (19,060 / 2,382 / 2,384) per `config.yaml` and writes JSONL to
    `data/processed/`.
 
 ## Usage

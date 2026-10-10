@@ -1,0 +1,26 @@
+{
+  "n_test": 2384,
+  "threshold": 0.75,
+  "tfidf_logreg": {
+    "intent_accuracy": 0.9937080536912751,
+    "intent_macro_f1": 0.9936343051575407,
+    "category_accuracy": 0.9983221476510067,
+    "ece": 0.12183860804398691,
+    "coverage_at_threshold": 0.847734899328859,
+    "selective_accuracy_at_threshold": 0.9995051954477981,
+    "error_caught_by_threshold": 0.9333333333333333
+  },
+  "distilbert": {
+    "intent_accuracy": 0.9987416107382551,
+    "intent_macro_f1": 0.9987082754422993,
+    "category_accuracy": 0.9995805369127517,
+    "ece": 0.0017833332187377382,
+    "coverage_at_threshold": 0.9991610738255033,
+    "selective_accuracy_at_threshold": 0.9987405541561712,
+    "error_caught_by_threshold": 0.0,
+    "cpu_latency": {
+      "p50_ms": 11.109332990599796,
+      "p95_ms": 12.621627093176356
+    }
+  }
+}

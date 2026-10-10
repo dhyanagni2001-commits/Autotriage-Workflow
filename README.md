@@ -4,6 +4,22 @@ AutoTriage is a support-ticket triage workflow that combines information retriev
 
 The project evaluates two trained NLP components—a bi-encoder retriever and a DistilBERT classifier—before using their outputs in a LangGraph workflow. External actions such as refunds and CRM updates are simulated so the decision flow can be tested safely.
 
+**Live demo:** https://dhyanagni2001-commits.github.io/Autotriage-Workflow/ — a routing playground, 80 real agent runs with audit traces, and the evaluation results.
+
+## Results at a Glance
+
+| What | Result |
+| --- | --- |
+| Retrieval, 27-article KB, 2,384 held-out tickets | Hit@1 **0.745 → 0.997** (off-the-shelf MiniLM → fine-tuned), MRR 0.845 → 0.999; TF-IDF baseline 0.490 |
+| Intent classification, 27 intents, 2,384 held-out tickets | DistilBERT **99.87%** accuracy / macro-F1 vs. 99.37% TF-IDF baseline |
+| Calibration (ECE) | **0.002** DistilBERT vs. 0.122 TF-IDF; 99.9% vs. 84.8% of tickets clear the 0.75 auto-action threshold |
+| End-to-end routing, 30 hand-written held-out tickets | decision accuracy **83.3% → 90.0%**, unsafe auto-refunds **4.0% → 0%** after category-level confidence + risk guardrail |
+| End-to-end routing, 50 hand-written dev tickets | 84.0% → 94.0%, unsafe auto-refunds 2.4% → 0% |
+| Latency, full graph on CPU (Apple M-series) | p50 **16 ms**, p95 19 ms per ticket |
+| Tests | 38 passing (`pytest tests/`) |
+
+The headline finding: models that score ~99.9% on the in-distribution test split route only 83–84% of hand-written tickets correctly, and one confidently auto-refunded a ticket containing a legal threat. The gap, and how the workflow was changed to close the unsafe part of it, is the core of this project. All numbers are reproducible from the commands below; raw outputs are in `results/`.
+
 ## Motivation
 
 Support workflows involve more than generating a response. A system must find the relevant policy, identify the type and urgency of a request, decide whether automation is appropriate, and preserve enough information for a person to review the decision.
@@ -37,19 +53,19 @@ flowchart TD
 
 ### Retriever
 
-The retriever uses a sentence-transformer bi-encoder and a FAISS index. It is fine-tuned on ticket-to-article pairs using contrastive learning and hard-negative examples.
+The retriever uses a sentence-transformer bi-encoder and a FAISS index. It is fine-tuned on (ticket, article, hard negative) triplets with MultipleNegativesRankingLoss, where hard negatives come from the same routing category (for example `track_refund` versus `get_refund`). A no-duplicates batch loader prevents the same article from appearing as both a positive and an in-batch negative.
 
 Its output includes the highest-ranked knowledge-base articles and their similarity scores.
 
 ### Classifier
 
-The classifier fine-tunes `distilbert-base-uncased` to predict a coarse support category. Its performance is compared with a TF-IDF and logistic-regression baseline.
+The classifier fine-tunes `distilbert-base-uncased` to predict one of 27 fine-grained Bitext intents. Its performance is compared with a TF-IDF and logistic-regression baseline.
 
-The classifier returns structured fields such as category, urgency, and confidence for the routing workflow.
+Each intent maps to one of six routing categories (`data/labels.py`). Because routing acts on categories, the agent's confidence is the probability summed over all intents in the predicted category. A ticket split 0.45/0.40 between `get_refund` and `track_refund` is a confident refund, not an uncertain one.
 
 ### Routing Workflow
 
-LangGraph coordinates retrieval, classification, routing, action selection, and audit logging. Routing behavior is controlled by thresholds and decision rules in `config.yaml`.
+LangGraph coordinates retrieval, classification, routing, action selection, and audit logging. Routing behavior is controlled by thresholds, decision rules, and a list of risk patterns in `config.yaml`. Risk patterns cover legal threats, chargebacks, strong negative sentiment, and prompt-injection markers. They are checked before any model-driven rule, so a match always escalates the ticket, however confident the classifier is.
 
 The workflow can select one of three outcomes:
 
@@ -69,78 +85,71 @@ Each run records the retrieved context, model outputs, routing result, selected 
 
 ## Example
 
-Input ticket:
-
-> I was charged twice for my subscription this month. Can you refund one of the charges? The duplicate charge is $12.99.
-
-Example workflow:
-
 ```text
-1. Retrieve  -> Find the duplicate-charge refund policy
-2. Classify  -> Category: refund; urgency: medium
-3. Route     -> Amount is within the configured review threshold
-4. Act       -> Call the simulated refund and CRM tools
-5. Record    -> Store the decision and action results in the audit trail
+Ticket: "refund refund refund refund $45 now or I sue"   amount_usd=45
+
+classify  -> intent get_refund, category refund, confidence 0.98
+decide    -> risk guardrail matched legal-threat pattern -> escalate
+act       -> escalate_to_human(reason=...)
 ```
 
-A larger refund request can be routed to draft-and-hold or escalation instead. The exact behavior is determined by the thresholds in `config.yaml`.
-
-No real refund or CRM operation is performed by the local example tools.
+Without the guardrail, this ticket was a confident, under-threshold refund and the agent issued it automatically. No real refund or CRM operation is performed by the local example tools.
 
 ## Model Evaluation
 
-The models were trained using the [Bitext customer-support dataset](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset). Exact duplicate ticket text is removed before splitting the examples.
-
-The following results were recorded from the project’s Kaggle training run. They describe this processed dataset and label configuration; they should not be interpreted as expected performance on a live support system.
+Models are trained on the [Bitext customer-support dataset](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset): 26,872 rows, deduplicated to 23,826 unique tickets and split 19,060 / 2,382 / 2,384. Training runs locally on an Apple M-series GPU (MPS) in about 10 minutes per model, or on Kaggle with `notebooks/kaggle_train_autotriage.ipynb`.
 
 ### Retrieval
 
-The retrieval experiment contains six candidate knowledge-base articles, with one target article for each ticket.
+27 knowledge-base articles (one per intent), 2,384 held-out tickets, one correct article each. With one relevant document, Hit@k is the right metric, not precision@k.
 
-| Model | Top-1 accuracy | MRR |
-| --- | ---: | ---: |
-| Off-the-shelf `all-MiniLM-L6-v2` | 0.54 | 0.68 |
-| Fine-tuned bi-encoder | 0.97 | 0.99 |
+| Model | Hit@1 | Hit@3 | Hit@5 | MRR |
+| --- | ---: | ---: | ---: | ---: |
+| TF-IDF (lexical) | 0.490 | 0.727 | 0.796 | 0.630 |
+| `all-MiniLM-L6-v2` (off-the-shelf) | 0.745 | 0.941 | 0.977 | 0.845 |
+| MiniLM fine-tuned (1 epoch) | **0.997** | **1.000** | **1.000** | **0.999** |
 
-The fine-tuned model selected the target article first more frequently in this experiment. Because the candidate collection contains only six articles, this result measures a small retrieval problem rather than large-scale knowledge-base search.
-
-The evaluation code should use terms such as `Hit@k`, `Recall@k`, or top-k accuracy when it measures whether the target appears anywhere in the first `k` results. With one relevant document, that measurement is not precision@k.
+An earlier version of the trainer added `(ticket, hard_negative)` as a separate *pair*. MultipleNegativesRankingLoss reads the second element of a pair as the positive, so that version trained tickets toward the wrong articles. The current trainer builds proper triplets.
 
 ### Classification
 
-| Model | Accuracy | Macro-F1 |
-| --- | ---: | ---: |
-| TF-IDF with logistic regression | 0.992 | 0.992 |
-| Fine-tuned DistilBERT | 0.997 | 0.997 |
+| Model | Intent acc. | Macro-F1 | Category acc. | ECE | Coverage at 0.75 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| TF-IDF + logistic regression | 0.9937 | 0.9936 | 0.9983 | 0.122 | 0.848 |
+| DistilBERT fine-tuned | **0.9987** | **0.9987** | **0.9996** | **0.002** | **0.999** |
 
-Both models perform near the ceiling on the six-category mapping. The categories are lexically distinct, so the TF-IDF baseline is already strong and DistilBERT provides only a small improvement.
-
-A more difficult follow-up experiment would retain the dataset’s finer-grained intent labels and evaluate generalization across paraphrases, templates, and unseen issue types.
+Bitext is templated, so both models are near ceiling on accuracy. The difference that matters for automation is calibration. TF-IDF is under-confident: at the 0.75 threshold it would hand 15% of tickets to a human, nearly all of them correct predictions. DistilBERT's confidences are usable as-is. CPU latency is 11 ms at p50 and 13 ms at p95.
 
 ### Leakage Controls
 
-The raw dataset contains repeated ticket text and unfilled placeholders. A random split performed before deduplication allowed exact copies to appear in both training and evaluation sets, producing overly optimistic results.
+The raw dataset contains exact duplicates, plus near-duplicates that differ only in casing, punctuation, or placeholder name (`{{Order Number}}` versus `{{Order ID}}`). The preparation step:
 
-The current preparation step:
-
-- Removes exact duplicate ticket text before splitting.
-- Checks that identical examples do not appear across splits.
-- Includes a regression test for exact-text overlap.
-- Sets random seeds in the training scripts.
-
-Exact deduplication does not remove every form of template or semantic similarity. Grouped or template-aware splitting would provide a stronger evaluation of generalization.
+- Deduplicates on a normalized form of the text before splitting (26,872 → 23,826).
+- Asserts that no text appears in more than one split.
+- Includes regression tests for split overlap and normalization.
+- Sets random seeds in all training scripts.
 
 ## End-to-End Evaluation
 
-Run the workflow evaluation with:
+In-distribution accuracy says little about real tickets. The workflow is evaluated on two hand-written sets labeled with the action a human would take (`auto_resolve`, `draft_hold`, `escalate`). Each set includes adversarial slices: prompt injection, legal threats, chargebacks, gibberish, empty input, and negative amounts.
+
+- `eval/labeled_tickets.jsonl` (50 tickets): the dev set. Failures here motivated the two fixes.
+- `eval/heldout_tickets.jsonl` (30 tickets): written and scored *before* the fixes were implemented, then re-scored once afterwards. It was not used for tuning.
+
+| Set | Variant | Decision acc. | Unsafe auto-resolve | Auto-resolve recall |
+| --- | --- | ---: | ---: | ---: |
+| Dev (50) | intent-level confidence, no guardrail | 84.0% | 2.4% (1/42) | 50.0% |
+| Dev (50) | + category confidence + risk guardrail | **94.0%** | **0%** | 75.0% |
+| Held-out (30) | intent-level confidence, no guardrail | 83.3% | 4.0% (1/25) | 60.0% |
+| Held-out (30) | + category confidence + risk guardrail | **90.0%** | **0%** | 60.0% |
+
+*Unsafe auto-resolve rate* is the share of tickets that should **not** be automated but were auto-refunded anyway. It is the metric that matters most. All remaining errors are conservative: real small refunds the classifier mistook for invoice or subscription questions get escalated, and one gibberish ticket is held as a draft for human review. Full confusion matrices and every misrouted ticket are in `results/e2e_*.json`.
 
 ```bash
-python -m eval.run_eval_suite --test-file eval/labeled_tickets.jsonl
+python -m eval.run_eval_suite --test-file eval/heldout_tickets.jsonl --out results/e2e_heldout.json -v
 ```
 
-The evaluation suite reports workflow-level measurements such as routing accuracy, auto-process rate, and escalation rate on the labeled examples.
-
-These results evaluate the configured rules and test cases. They do not measure the operational safety of automating actions in a real customer-support environment.
+These are small, hand-labeled sets. They show failure modes and the direction of each fix. They are not estimates of production error rates.
 
 ## Technology
 
@@ -160,14 +169,16 @@ These results evaluate the configured rules and test cases. They do not measure 
 
 ```text
 autotriage-workflow/
-├── data/               # Dataset preparation and processed data
+├── data/               # Dataset preparation, label taxonomy (labels.py)
 ├── retriever/          # Bi-encoder training, FAISS indexing, and evaluation
 ├── classifier/         # DistilBERT and TF-IDF training and evaluation
 ├── agent/              # LangGraph state, nodes, tools, and routing graph
 ├── cloud/              # AWS templates, handlers, and deployment notes
-├── eval/               # End-to-end workflow evaluation
+├── eval/               # End-to-end workflow evaluation + hand-labeled ticket sets
+├── results/            # JSON outputs of every evaluation reported above
 ├── tests/              # Decision logic and data-leakage tests
 ├── notebooks/          # Kaggle training notebook
+├── docs/               # GitHub Pages demo site (index.html + data.json from build_data.py)
 ├── config.yaml         # Models, thresholds, paths, and AWS settings
 ├── requirements.txt
 └── setup.py
@@ -201,13 +212,25 @@ Run tests and the evaluation suite:
 ```bash
 pytest tests/ -v
 python -m eval.run_eval_suite --test-file eval/labeled_tickets.jsonl
+python -m eval.run_eval_suite --test-file eval/heldout_tickets.jsonl
 ```
 
 When trained model artifacts are not present, the retrieval and classification nodes use deterministic mock outputs. This mode verifies workflow behavior but does not demonstrate model inference.
 
+## Demo Site
+
+`docs/` is a static GitHub Pages site. It has no backend: model outputs for the 80 hand-written tickets are precomputed, and the routing playground runs the same `decide()` rules and `config.yaml` risk patterns in JavaScript. To rebuild after retraining:
+
+```bash
+python docs/build_data.py
+python -m http.server -d docs 8000   # preview at http://localhost:8000
+```
+
+To publish, open the GitHub repo's **Settings → Pages** and set the source to *Deploy from a branch*, branch `main`, folder `/docs`.
+
 ## Training
 
-The training notebook runs data preparation, retriever fine-tuning, FAISS index creation, classifier fine-tuning, and model evaluation on Kaggle:
+All stages run locally (Apple MPS, CUDA, or CPU) in about 20 minutes total on an M-series Mac. The training notebook runs the same pipeline on Kaggle:
 
 ```text
 notebooks/kaggle_train_autotriage.ipynb
@@ -272,13 +295,13 @@ The retriever, classifier, and workflow are separate components. This allows eac
 
 The tradeoff is additional integration work and more artifacts to deploy and monitor.
 
-### Small Knowledge Base
+### Fine-Grained Intents, Coarse Routing
 
-The six-article knowledge base makes experiments fast and makes retrieval failures easy to inspect. It does not represent the indexing, latency, and ambiguity challenges of a large support knowledge base.
+The classifier predicts 27 intents, which is the harder and more informative task, while routing rules stay on six categories that a support lead can reason about. Summing probability within a category made routing confidence match what the rules actually act on. On the dev set, it recovered refund tickets that had been split between sibling intents.
 
-### Coarse Classification Labels
+### Guardrails Outside the Model
 
-Six broad categories simplify routing but also make the classification task relatively easy. Higher accuracy on this mapping does not necessarily imply strong performance on fine-grained support intents.
+The classifier learned polite, templated tickets and confidently labeled a legal threat as `get_refund`. Retraining would not fix that reliably without adversarial data. A small, auditable pattern list in `config.yaml` blocks automated action instead. The tradeoff is that the patterns are hand-maintained and can be evaded by paraphrase, so they complement the model rather than replace it.
 
 ### Confidence-Based Automation
 
@@ -294,9 +317,11 @@ Recording intermediate outputs improves debugging and reviewability. In a real s
 
 ## Current Limitations
 
-- The retriever searches only six canonical articles.
-- Classification uses six coarse categories with strong lexical separation.
-- Deduplication handles exact matches but not all template-level similarity.
+- The knowledge base has 27 articles, far fewer than a real support KB.
+- Bitext is templated, so in-distribution accuracy is near ceiling. The hand-written sets (80 tickets total) are the more honest signal but are small.
+- Auto-resolve recall is 60–75%: the classifier sometimes misreads informal refund requests as invoice or subscription questions. These fail safe (escalate) but limit automation.
+- Risk patterns are regex-based and can be evaded by paraphrase.
+- Normalized deduplication does not remove paraphrase-level template similarity.
 - Model results come from one processed dataset rather than multiple external datasets.
 - External refund and CRM integrations are simulated.
 - LLM-generated drafts have not been evaluated for factuality or policy compliance.
@@ -306,9 +331,9 @@ Recording intermediate outputs improves debugging and reviewability. In a real s
 ## Possible Extensions
 
 - Evaluate retrieval with a larger and more varied knowledge base.
-- Use the original fine-grained intent labels for classification.
+- Fine-tune on informal and adversarial tickets to raise auto-resolve recall.
+- Replace regex risk patterns with a small trained risk classifier, keeping the regexes as a floor.
 - Add grouped splitting based on templates or semantic similarity.
-- Calibrate classifier confidence before setting automation thresholds.
 - Evaluate drafted replies for policy grounding and unsupported statements.
 - Add adversarial tests for prompt injection in tickets and retrieved content.
 - Require human approval before every irreversible external action.
@@ -318,4 +343,4 @@ Recording intermediate outputs improves debugging and reviewability. In a real s
 
 This project helped me understand how retrieval, classification, workflow orchestration, and action controls can be evaluated separately instead of being hidden inside one prompt.
 
-It also showed why strong metrics need context: the classifier’s high score is partly explained by coarse, lexically distinct labels, while the retriever’s results come from a small candidate collection. Identifying duplicate leakage and comparing against simple baselines were as important as training the larger models.
+It also showed why strong metrics need context. A classifier at 99.9% on its test split routed only 83% of hand-written tickets correctly and confidently approved a refund attached to a legal threat. Evaluating the whole workflow on out-of-distribution tickets, measuring unsafe actions separately from accuracy, and keeping a held-out set untouched while fixing failures were as important as training the models.

@@ -1,7 +1,7 @@
 """
 Download the Bitext customer-support dataset and derive:
-  - classifier train/val/test JSONL (ticket_text -> label)
-  - a small synthetic knowledge base (one article per intent)
+  - classifier train/val/test JSONL (ticket_text -> fine-grained intent label + coarse category)
+  - a knowledge base with one article per fine-grained intent (27)
   - retrieval train/val/test JSONL (ticket_text -> correct KB article id
     + hard negative KB article ids)
 
@@ -11,40 +11,30 @@ Usage:
 import argparse
 import json
 import random
+import re
 from collections import defaultdict
 from pathlib import Path
 
 import yaml
 from datasets import load_dataset
 
-# Coarse label mapping. Edit after inspecting real intent value counts —
-# run this script with --inspect first.
-INTENT_MAP = {
-    "get_refund": "refund",
-    "track_refund": "refund",
-    "check_refund_policy": "refund",
-    "cancel_order": "billing",
-    "change_order": "billing",
-    "payment_issue": "billing",
-    "check_invoice": "billing",
-    "check_payment_methods": "billing",
-    "delivery_options": "shipping",
-    "delivery_period": "shipping",
-    "track_order": "shipping",
-    "place_order": "shipping",
-    "create_account": "account",
-    "delete_account": "account",
-    "edit_account": "account",
-    "recover_password": "account",
-    "switch_account": "account",
-    "registration_problems": "account",
-    "contact_customer_service": "technical",
-    "contact_human_agent": "urgent_escalate",
-    "complaint": "urgent_escalate",
-    "review": "technical",
-    "newsletter_subscription": "technical",
-}
-DEFAULT_LABEL = "technical"
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from data.labels import category_for  # noqa: E402
+
+_PLACEHOLDER = re.compile(r"\{\{[^}]*\}\}")
+_NON_ALNUM = re.compile(r"[^a-z0-9 ]+")
+
+
+def normalize(text: str) -> str:
+    """Canonical form used for dedup: lowercase, placeholders collapsed,
+    punctuation stripped, whitespace squashed. Catches near-duplicates that
+    differ only in casing/punctuation/placeholder name, which exact-match
+    dedup misses."""
+    t = _PLACEHOLDER.sub(" slot ", text.lower())
+    t = _NON_ALNUM.sub(" ", t)
+    return " ".join(t.split())
 
 
 def load_raw(dataset_name: str = "bitext/Bitext-customer-support-llm-chatbot-training-dataset"):
@@ -57,49 +47,41 @@ def inspect(ds):
     for row in ds:
         counts[row["intent"]] += 1
     for intent, n in sorted(counts.items(), key=lambda x: -x[1]):
-        mapped = INTENT_MAP.get(intent, DEFAULT_LABEL)
+        mapped = category_for(intent)
         print(f"{intent:30s} n={n:6d}  -> {mapped}")
 
 
-def build_kb_articles(ds, labels):
-    """One canonical article per label, built from a representative
-    response for that label. Deduplicate near-identical responses."""
-    by_label = defaultdict(list)
+def build_kb_articles(ds):
+    """One canonical article per fine-grained intent (27 total), using the
+    longest agent response for that intent as the article body."""
+    by_intent = defaultdict(list)
     for row in ds:
-        label = INTENT_MAP.get(row["intent"], DEFAULT_LABEL)
-        by_label[label].append(row["response"])
-
-    articles = []
-    for label in labels:
-        responses = by_label.get(label, [])
-        if not responses:
-            continue
-        # naive: take the longest response as the "canonical" article text
-        text = max(responses, key=len)
-        articles.append({"id": f"kb_{label}", "label": label, "text": text})
-    return articles
+        by_intent[row["intent"]].append(row["response"])
+    return [
+        {"id": f"kb_{intent}", "intent": intent, "category": category_for(intent),
+         "text": max(responses, key=len)}
+        for intent, responses in sorted(by_intent.items())
+    ]
 
 
 def build_examples(ds):
-    """One example per *distinct* instruction string. The raw dataset is
-    templated (many rows are exact-duplicate text, sometimes with unfilled
-    `{{...}}` placeholders) — without this dedup, identical strings land in
-    both train and test after the random split below, and the classifier/
-    retriever partly just memorize them instead of generalizing, inflating
-    eval numbers."""
+    """One example per distinct *normalized* instruction. The raw dataset is
+    templated (exact duplicates, plus near-duplicates differing only in
+    case/punctuation/placeholder); without this, the same request lands in
+    both train and test and inflates eval numbers."""
     seen = set()
     examples = []
     for row in ds:
-        text = row["instruction"]
-        if text in seen:
+        key = normalize(row["instruction"])
+        if key in seen:
             continue
-        seen.add(text)
-        label = INTENT_MAP.get(row["intent"], DEFAULT_LABEL)
+        seen.add(key)
         examples.append({
-            "ticket_text": text,
-            "label": label,
-            "intent_raw": row["intent"],
+            "ticket_text": row["instruction"],
+            "label": row["intent"],
+            "category": category_for(row["intent"]),
         })
+    print(f"dedup: {len(ds)} raw rows -> {len(examples)} unique normalized tickets")
     return examples
 
 
@@ -122,22 +104,25 @@ def write_jsonl(path: Path, rows):
 
 
 def build_retrieval_pairs(examples, articles, hard_negatives_per_pos, seed):
+    """Hard negatives are drawn first from articles in the *same coarse
+    category* (e.g. track_refund vs. get_refund), which are the confusions
+    that actually matter, then topped up from the rest of the KB."""
     rng = random.Random(seed)
-    article_by_label = {a["label"]: a for a in articles}
-    all_ids = [a["id"] for a in articles]
+    article_by_intent = {a["intent"]: a for a in articles}
 
     pairs = []
     for ex in examples:
-        pos = article_by_label.get(ex["label"])
+        pos = article_by_intent.get(ex["label"])
         if pos is None:
             continue
-        negative_pool = [i for i in all_ids if i != pos["id"]]
-        k = min(hard_negatives_per_pos, len(negative_pool))
-        hard_negs = rng.sample(negative_pool, k) if k > 0 else []
+        same = [a["id"] for a in articles if a["category"] == pos["category"] and a["id"] != pos["id"]]
+        other = [a["id"] for a in articles if a["category"] != pos["category"]]
+        rng.shuffle(same)
+        rng.shuffle(other)
         pairs.append({
             "ticket_text": ex["ticket_text"],
             "positive_id": pos["id"],
-            "hard_negative_ids": hard_negs,
+            "hard_negative_ids": (same + other)[:hard_negatives_per_pos],
         })
     return pairs
 
@@ -172,7 +157,6 @@ def main():
 
     cfg = yaml.safe_load(open(args.config))
     data_cfg = cfg["data"]
-    labels = cfg["classifier"]["labels"]
 
     ds = load_raw()
 
@@ -181,10 +165,13 @@ def main():
         return
 
     examples = build_examples(ds)
-    articles = build_kb_articles(ds, labels)
+    articles = build_kb_articles(ds)
 
     processed_dir = Path(data_cfg["processed_dir"])
     write_jsonl(processed_dir / "kb_articles.jsonl", articles)
+    labels = sorted({ex["label"] for ex in examples})
+    (processed_dir / "labels.json").write_text(json.dumps(labels, indent=1))
+    print(f"{len(labels)} intent labels -> {processed_dir / 'labels.json'}")
 
     train, val, test = split(
         examples, data_cfg["train_split"], data_cfg["val_split"], data_cfg["seed"]

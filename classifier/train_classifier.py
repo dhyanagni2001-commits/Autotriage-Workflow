@@ -13,6 +13,7 @@ Usage:
 """
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,9 @@ from transformers import (
     set_seed,
 )
 from transformers.trainer_utils import get_last_checkpoint
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from data.labels import category_for  # noqa: E402
 
 
 def load_split(path, label2id):
@@ -56,7 +60,7 @@ def main():
     seed = cfg["data"]["seed"]
     processed_dir = Path(cfg["data"]["processed_dir"])
 
-    labels = c_cfg["labels"]
+    labels = json.loads((processed_dir / "labels.json").read_text())
     label2id = {l: i for i, l in enumerate(labels)}
     id2label = {i: l for l, i in label2id.items()}
 
@@ -128,6 +132,9 @@ def main():
         trainer = Trainer(**trainer_kwargs, tokenizer=tokenizer)
 
     trainer.train(resume_from_checkpoint=resume_checkpoint)
+    # Ship the intent -> routing-category map inside config.json so serving
+    # code (SageMaker tarball) can route without importing data/labels.py.
+    trainer.model.config.intent_to_category = {l: category_for(l) for l in labels}
     trainer.save_model(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
     complete_marker.write_text("ok")

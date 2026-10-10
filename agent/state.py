@@ -13,9 +13,11 @@ class TicketState(TypedDict, total=False):
     retrieved_articles: list  # list of {"id": str, "text": str, "score": float}
 
     # Populated by classify node
-    category: str
+    intent: str          # fine-grained Bitext intent (27 classes)
+    category: str        # coarse routing category derived from intent
     urgency: str
-    confidence: float
+    confidence: float    # category-level (summed over the category's intents)
+    intent_confidence: float
 
     # Populated by decide node
     action: str  # "auto_resolve" | "draft_hold" | "escalate"

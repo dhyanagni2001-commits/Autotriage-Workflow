@@ -1,6 +1,9 @@
 """
-Evaluate retrieval quality (P@k, MRR) on the held-out test set, comparing
-the fine-tuned bi-encoder against the off-the-shelf base model.
+Evaluate retrieval quality (Hit@k, MRR) on the held-out test set, comparing
+the fine-tuned bi-encoder against a TF-IDF lexical baseline and the
+off-the-shelf base model. With exactly one relevant article per ticket,
+Hit@k (target in top k) is the right metric, not precision@k.
+Writes results/retrieval.json.
 
 Usage:
     python retriever/eval_retrieval.py --config config.yaml
@@ -11,7 +14,8 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 
 def load_kb(path):
@@ -26,16 +30,20 @@ def load_kb(path):
 def evaluate(model, test_examples, kb, ks):
     kb_ids = list(kb.keys())
     kb_texts = [kb[i] for i in kb_ids]
+    queries = [ex["ticket_text"] for ex in test_examples]
+    if model == "tfidf":
+        vec = TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True).fit(kb_texts + queries)
+        sims = (vec.transform(queries) @ vec.transform(kb_texts).T).toarray()
+        return _score(sims, kb_ids, test_examples, ks)
     kb_embeddings = model.encode(kb_texts, convert_to_numpy=True, normalize_embeddings=True)
+    query_embeddings = model.encode(queries, convert_to_numpy=True, normalize_embeddings=True)
+    return _score(query_embeddings @ kb_embeddings.T, kb_ids, test_examples, ks)
 
+
+def _score(sims, kb_ids, test_examples, ks):
     hits_at_k = {k: 0 for k in ks}
     reciprocal_ranks = []
-
-    queries = [ex["ticket_text"] for ex in test_examples]
-    query_embeddings = model.encode(queries, convert_to_numpy=True, normalize_embeddings=True)
-
-    max_k = max(ks)
-    sims = query_embeddings @ kb_embeddings.T
+    max_k = len(kb_ids)
     ranked = np.argsort(-sims, axis=1)
 
     for i, ex in enumerate(test_examples):
@@ -48,7 +56,7 @@ def evaluate(model, test_examples, kb, ks):
         reciprocal_ranks.append(1.0 / rank if rank else 0.0)
 
     n = len(test_examples)
-    metrics = {f"P@{k}": hits_at_k[k] / n for k in ks}
+    metrics = {f"Hit@{k}": hits_at_k[k] / n for k in ks}
     metrics["MRR"] = float(np.mean(reciprocal_ranks))
     return metrics
 
@@ -65,21 +73,23 @@ def main():
     kb = load_kb(processed_dir / "kb_articles.jsonl")
     test_examples = [json.loads(l) for l in open(processed_dir / "retrieval_test.jsonl")]
 
-    print(f"{'model':<28}" + "".join(f"{f'P@{k}':>8}" for k in r_cfg["eval_k"]) + f"{'MRR':>8}")
+    results = {"n_test": len(test_examples), "n_articles": len(kb)}
+    models = [
+        ("tfidf (lexical)", "tfidf"),
+        ("minilm (off-the-shelf)", SentenceTransformer(r_cfg["base_model"])),
+        ("minilm (fine-tuned)", SentenceTransformer(r_cfg["output_dir"])),
+    ]
+    print(f"n_test={len(test_examples)}  kb_articles={len(kb)}")
+    print(f"{'model':<26}" + "".join(f"{f'Hit@{k}':>8}" for k in r_cfg["eval_k"]) + f"{'MRR':>8}")
+    for name, model in models:
+        m = evaluate(model, test_examples, kb, r_cfg["eval_k"])
+        results[name] = m
+        print(f"{name:<26}" + "".join(f"{m[f'Hit@{k}']:>8.3f}" for k in r_cfg["eval_k"]) + f"{m['MRR']:>8.3f}")
 
-    baseline = SentenceTransformer(r_cfg["base_model"])
-    base_metrics = evaluate(baseline, test_examples, kb, r_cfg["eval_k"])
-    row = f"{'baseline (off-the-shelf)':<28}"
-    row += "".join(f"{base_metrics[f'P@{k}']:>8.2f}" for k in r_cfg["eval_k"])
-    row += f"{base_metrics['MRR']:>8.2f}"
-    print(row)
-
-    finetuned = SentenceTransformer(r_cfg["output_dir"])
-    ft_metrics = evaluate(finetuned, test_examples, kb, r_cfg["eval_k"])
-    row = f"{'fine-tuned':<28}"
-    row += "".join(f"{ft_metrics[f'P@{k}']:>8.2f}" for k in r_cfg["eval_k"])
-    row += f"{ft_metrics['MRR']:>8.2f}"
-    print(row)
+    out = Path("results/retrieval.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(results, indent=2))
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":

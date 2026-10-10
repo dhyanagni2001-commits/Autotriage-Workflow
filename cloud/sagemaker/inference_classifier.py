@@ -40,8 +40,13 @@ def predict_fn(ticket_text, loaded):
         logits = model(**enc).logits
     probs = F.softmax(logits, dim=-1)[0]
     pred_id = int(torch.argmax(probs).item())
+    intent = model.config.id2label[pred_id]
+    # train_classifier.py stores the intent -> routing-category map in the
+    # model config so this tarball doesn't need the repo's data/labels.py.
+    intent_to_category = getattr(model.config, "intent_to_category", {}) or {}
     return {
-        "category": model.config.id2label[pred_id],
+        "intent": intent,
+        "category": intent_to_category.get(intent, "technical"),
         "confidence": float(probs[pred_id].item()),
     }
 

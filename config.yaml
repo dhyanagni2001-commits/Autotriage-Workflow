@@ -13,11 +13,13 @@ retriever:
   output_dir: retriever/checkpoints/biencoder-v1
   faiss_index_path: retriever/faiss_index/kb.index
   max_seq_len: 256
-  batch_size: 64
-  epochs: 5
+  # Batch must stay well under the 27-article KB: NoDuplicatesDataLoader
+  # forbids an article appearing twice in a batch (positive or negative).
+  batch_size: 8
+  epochs: 1
   lr: 2.0e-5
-  hard_negatives_per_pos: 4
-  eval_k: [1, 5, 10]
+  hard_negatives_per_pos: 3   # same-category articles first
+  eval_k: [1, 3, 5]
   # Epoch-level checkpoints written under output_dir/checkpoints/epoch_N so
   # training can resume after a Kaggle session timeout/crash instead of
   # restarting from the base model. See train_biencoder.py::resume logic.
@@ -28,16 +30,12 @@ classifier:
   output_dir: classifier/checkpoints/classifier-v1
   max_seq_len: 128
   batch_size: 32
-  epochs: 4
-  lr: 3.0e-5
+  epochs: 3
+  lr: 5.0e-5
   save_total_limit: 3
-  labels:
-    - billing
-    - refund
-    - technical
-    - account
-    - shipping
-    - urgent_escalate
+  # Labels are the 27 fine-grained Bitext intents, written by
+  # data/prepare_bitext.py to <processed_dir>/labels.json. Routing uses the
+  # coarse category each intent maps to (data/labels.py).
 
 agent:
   llm_provider: openai
@@ -48,6 +46,18 @@ agent:
   auto_approve_refund_threshold_usd: 50
   confidence_threshold: 0.75
   retrieval_top_k: 3
+  # Regexes (matched on lowercased ticket text) that force escalation
+  # before any model-driven rule runs: legal/chargeback threats, strong
+  # negative sentiment, explicit human requests, and prompt injection.
+  risk_patterns:
+    - '\b(sue|lawsuit|lawyer|attorney|legal action|court)\b'
+    - '\b(chargeback|dispute the charge|better business bureau|bbb)\b'
+    - '\b(furious|disgusted|unacceptable|outraged|scam|fraud)\b'
+    - '\b(complain|complaint)\b'
+    - '(ignore|disregard) (all |your |the )?(previous |prior )?(instructions|rules)'
+    - '(^|\s)(system|assistant)\s*:'
+    - '</?ticket>|new instruction'
+
 
 aws:
   region: us-west-2

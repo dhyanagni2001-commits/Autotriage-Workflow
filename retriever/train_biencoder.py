@@ -22,7 +22,7 @@ import numpy as np
 import torch
 import yaml
 from sentence_transformers import SentenceTransformer, InputExample, losses
-from torch.utils.data import DataLoader
+from sentence_transformers.datasets import NoDuplicatesDataLoader
 
 
 def _set_seed(seed: int):
@@ -49,24 +49,22 @@ def load_kb(path):
 
 
 def load_training_examples(retrieval_jsonl, kb):
-    """Each row becomes one InputExample per hard negative: (ticket, positive)
-    with MultipleNegativesRankingLoss using in-batch negatives, plus the
-    explicit hard negatives appended as additional in-batch items."""
+    """One (ticket, positive, hard_negative) triplet per row.
+    MultipleNegativesRankingLoss treats texts[1] as the positive and both
+    the explicit hard negative and every other in-batch article as
+    negatives. (An earlier version appended (ticket, hard_negative) as a
+    separate *pair*, which MNRL reads as a positive — i.e. it trained
+    tickets toward the wrong articles.)"""
     examples = []
     with open(retrieval_jsonl) as f:
         for line in f:
             row = json.loads(line)
             pos_text = kb.get(row["positive_id"])
+            negs = [kb[n] for n in row["hard_negative_ids"] if n in kb]
             if pos_text is None:
                 continue
-            examples.append(InputExample(texts=[row["ticket_text"], pos_text]))
-            # Hard negatives: MultipleNegativesRankingLoss treats every other
-            # example's positive in the batch as a negative, but we also
-            # explicitly add hard-negative pairs to bias the batch composition.
-            for neg_id in row["hard_negative_ids"]:
-                neg_text = kb.get(neg_id)
-                if neg_text:
-                    examples.append(InputExample(texts=[row["ticket_text"], neg_text]))
+            texts = [row["ticket_text"], pos_text] + negs[:1]
+            examples.append(InputExample(texts=texts))
     return examples
 
 
@@ -140,7 +138,10 @@ def main():
         model = SentenceTransformer(r_cfg["base_model"])
         model.max_seq_length = r_cfg["max_seq_len"]
 
-    train_dataloader = DataLoader(train_examples, shuffle=True, batch_size=r_cfg["batch_size"])
+    # The KB is small, so a plain random batch often contains the same
+    # article as two queries' positives — MNRL would then treat a correct
+    # article as a negative. NoDuplicatesDataLoader prevents that.
+    train_dataloader = NoDuplicatesDataLoader(train_examples, batch_size=r_cfg["batch_size"])
     train_loss = losses.MultipleNegativesRankingLoss(model)
     warmup_steps = int(0.1 * len(train_dataloader))
 

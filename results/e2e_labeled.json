@@ -1,0 +1,59 @@
+{
+  "n": 50,
+  "decision_accuracy": 0.94,
+  "unsafe_auto_resolve_rate": 0.0,
+  "auto_resolve_recall": 0.75,
+  "auto_resolve_rate": 0.12,
+  "escalation_rate": 0.48,
+  "latency_ms": {
+    "p50": 16.059332992881536,
+    "p95": 17.90368530782871
+  },
+  "by_slice": {
+    "account": 1.0,
+    "adversarial": 1.0,
+    "billing": 0.8571428571428571,
+    "complaint": 1.0,
+    "human_agent": 1.0,
+    "other": 1.0,
+    "refund_large": 1.0,
+    "refund_small": 0.75,
+    "shipping": 1.0
+  },
+  "confusion": {
+    "auto_resolve": {
+      "escalate": 2,
+      "auto_resolve": 6
+    },
+    "draft_hold": {
+      "draft_hold": 20,
+      "escalate": 1
+    },
+    "escalate": {
+      "escalate": 21
+    }
+  },
+  "misses": [
+    {
+      "ticket": "Hi, I was charged twice for my subscription this month, can you refund one of the charges? Order #48213.",
+      "expected": "auto_resolve",
+      "got": "escalate",
+      "intent": "get_invoice",
+      "confidence": 0.572
+    },
+    {
+      "ticket": "I want a refund for the duplicate payment of $49.99.",
+      "expected": "auto_resolve",
+      "got": "escalate",
+      "intent": "payment_issue",
+      "confidence": 0.62
+    },
+    {
+      "ticket": "Please send me a copy of my bill.",
+      "expected": "draft_hold",
+      "got": "escalate",
+      "intent": "get_invoice",
+      "confidence": 0.648
+    }
+  ]
+}

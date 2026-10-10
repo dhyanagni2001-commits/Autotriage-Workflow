@@ -16,9 +16,9 @@ KB/policy article.
   (delete the file to force retraining from scratch).
 - `build_index.py` — embeds all KB articles with the fine-tuned model and
   builds a FAISS index for retrieval at inference time.
-- `eval_retrieval.py` — computes P@k and MRR on the held-out retrieval
-  test set, for both the fine-tuned model and the off-the-shelf baseline
-  (`all-MiniLM-L6-v2`), and prints a side-by-side comparison table.
+- `eval_retrieval.py` — computes Hit@k and MRR on the held-out retrieval
+  test set for a TF-IDF baseline, the off-the-shelf base model
+  (`all-MiniLM-L6-v2`), and the fine-tuned model, and prints a side-by-side comparison table.
 
 ## Usage
 
@@ -44,17 +44,19 @@ resulting `retriever/checkpoints/biencoder-v1/` and
 retrieval into the agent (`agent/nodes.py` picks them up automatically
 if present).
 
-## Expected output of eval_retrieval.py
+## Results (2,384 held-out tickets, 27-article KB)
 
 ```
-model                    P@1    P@5    P@10    MRR
-all-MiniLM-L6-v2 (base)  0.41   0.68   0.79    0.53
-biencoder-v1 (fine-tuned) 0.XX   0.XX   0.XX   0.XX   <- fill in after training
+model                      Hit@1   Hit@3   Hit@5     MRR
+tfidf (lexical)            0.490   0.727   0.796   0.630
+minilm (off-the-shelf)     0.745   0.941   0.977   0.845
+minilm (fine-tuned)        0.997   1.000   1.000   0.999
 ```
 
-This is the number that goes on the resume: "improved retrieval P@10 from
-X to Y by fine-tuning a bi-encoder with hard-negative mining, mirroring
-the approach used in QueryLens."
+One epoch with MultipleNegativesRankingLoss on (ticket, article,
+same-category hard negative) triplets, `NoDuplicatesDataLoader` so a
+batch never contains the same article twice. Full numbers in
+`results/retrieval.json`.
 
 ## TODO
 

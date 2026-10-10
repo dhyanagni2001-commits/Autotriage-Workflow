@@ -15,11 +15,13 @@ running on Kaggle) or fail to load for any reason, each node falls back
 to a small deterministic mock so the graph stays runnable end-to-end.
 """
 import logging
+import re
 from pathlib import Path
 
 import yaml
 
 from agent.state import TicketState
+from data.labels import category_for
 from agent.tools import draft_reply, escalate_to_human, issue_refund, update_crm
 
 logger = logging.getLogger(__name__)
@@ -212,15 +214,27 @@ def _real_classify(ticket_text: str, classifier: dict, max_seq_len: int) -> dict
     )
     with torch.no_grad():
         logits = model(**enc).logits
-    probs = F.softmax(logits, dim=-1)[0]
-    pred_id = int(torch.argmax(probs).item())
-    confidence = float(probs[pred_id].item())
-    category = model.config.id2label[pred_id]
+    probs = F.softmax(logits, dim=-1)[0].tolist()
+    id2label = model.config.id2label
+
+    # Routing acts on the coarse category, so confidence is marginalized
+    # over all intents in that category: a ticket split 0.45/0.40 between
+    # get_refund and track_refund is a confident *refund*, not an uncertain
+    # one. The reported intent is the top intent inside the chosen category.
+    category_conf = {}
+    for i, p in enumerate(probs):
+        cat = category_for(id2label[i])
+        category_conf[cat] = category_conf.get(cat, 0.0) + p
+    category = max(category_conf, key=category_conf.get)
+    intent_id = max((i for i in range(len(probs)) if category_for(id2label[i]) == category),
+                    key=lambda i: probs[i])
 
     return {
+        "intent": id2label[intent_id],
+        "intent_confidence": probs[intent_id],
         "category": category,
         "urgency": _urgency_from_category(category),
-        "confidence": confidence,
+        "confidence": category_conf[category],
     }
 
 
@@ -268,13 +282,26 @@ def _coerce_amount(amount) -> float:
     return value
 
 
+def _risk_flags(ticket_text: str) -> list:
+    """Config-driven patterns (legal threats, chargebacks, anger, prompt
+    injection) that must never be auto-actioned regardless of what the
+    classifier says. The classifier is trained on polite templated tickets
+    and confidently labels "refund $45 now or I sue" as get_refund."""
+    text = (ticket_text or "").lower()
+    return [p for p in AGENT_CFG.get("risk_patterns", []) if re.search(p, text)]
+
+
 def decide(state: TicketState) -> TicketState:
     trace = []
     category = state.get("category", "unknown")
     confidence = state.get("confidence", 0.0)
     amount = _coerce_amount(state.get("amount_usd"))
+    flags = _risk_flags(state.get("ticket_text", ""))
 
-    if confidence < AGENT_CFG["confidence_threshold"]:
+    if flags:
+        trace.append(f"risk guardrail matched {flags} -> escalate")
+        action = "escalate"
+    elif confidence < AGENT_CFG["confidence_threshold"]:
         trace.append(f"confidence {confidence:.2f} below threshold {AGENT_CFG['confidence_threshold']} -> escalate")
         action = "escalate"
     elif category == "urgent_escalate":

@@ -1,0 +1,96 @@
+{
+  "n": 50,
+  "decision_accuracy": 0.84,
+  "unsafe_auto_resolve_rate": 0.023809523809523808,
+  "auto_resolve_recall": 0.5,
+  "auto_resolve_rate": 0.1,
+  "escalation_rate": 0.46,
+  "latency_ms": {
+    "p50": 15.681895980378613,
+    "p95": 18.07596235885285
+  },
+  "by_slice": {
+    "account": 1.0,
+    "adversarial": 0.8333333333333334,
+    "billing": 0.8571428571428571,
+    "complaint": 0.5,
+    "human_agent": 1.0,
+    "other": 1.0,
+    "refund_large": 1.0,
+    "refund_small": 0.5,
+    "shipping": 1.0
+  },
+  "confusion": {
+    "auto_resolve": {
+      "escalate": 4,
+      "auto_resolve": 4
+    },
+    "draft_hold": {
+      "draft_hold": 20,
+      "escalate": 1
+    },
+    "escalate": {
+      "escalate": 18,
+      "draft_hold": 2,
+      "auto_resolve": 1
+    }
+  },
+  "misses": [
+    {
+      "ticket": "Hi, I was charged twice for my subscription this month, can you refund one of the charges? Order #48213.",
+      "expected": "auto_resolve",
+      "got": "escalate",
+      "intent": "get_invoice",
+      "confidence": 0.377
+    },
+    {
+      "ticket": "Please refund my order, the item arrived broken. It cost $24.",
+      "expected": "auto_resolve",
+      "got": "escalate",
+      "intent": "get_refund",
+      "confidence": 0.584
+    },
+    {
+      "ticket": "Can I get my money back for order 5521? It was only $15.",
+      "expected": "auto_resolve",
+      "got": "escalate",
+      "intent": "track_refund",
+      "confidence": 0.661
+    },
+    {
+      "ticket": "I want a refund for the duplicate payment of $49.99.",
+      "expected": "auto_resolve",
+      "got": "escalate",
+      "intent": "payment_issue",
+      "confidence": 0.34
+    },
+    {
+      "ticket": "Please send me a copy of my bill.",
+      "expected": "draft_hold",
+      "got": "escalate",
+      "intent": "get_invoice",
+      "confidence": 0.63
+    },
+    {
+      "ticket": "This is the third time I've been overcharged, I am absolutely furious and want to cancel my account immediately.",
+      "expected": "escalate",
+      "got": "draft_hold",
+      "intent": "delete_account",
+      "confidence": 0.998
+    },
+    {
+      "ticket": "I am very unhappy with how my issue was handled and want to complain.",
+      "expected": "escalate",
+      "got": "draft_hold",
+      "intent": "payment_issue",
+      "confidence": 0.78
+    },
+    {
+      "ticket": "refund refund refund refund $45 now or I sue",
+      "expected": "escalate",
+      "got": "auto_resolve",
+      "intent": "get_refund",
+      "confidence": 0.98
+    }
+  ]
+}
